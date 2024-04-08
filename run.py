@@ -3,6 +3,8 @@ import subprocess
 import paramiko
 import requests
 import time
+import re
+import configparser
 
 # Функция для установки библиотеки
 def install(package):
@@ -16,22 +18,22 @@ import paramiko
 install("requests")
 import requests
 
-# Функция для запроса IP и пароля
-def request_credentials():
-    ip = input("Enter the IP address: ")
-    username = input("Enter the username: ")
-    password = input("Enter the password: ")
-    return ip, username, password
+# Чтение конфигурации из файла
+config = configparser.ConfigParser()
+config.read('config.ini')
 
-# Если IP и пароль не указаны, запросить их
-HOST = ''
-USERNAME = ''
-PASSWORD = ''
+# Получение значений из конфигурации
+HOST = config['SSH']['host']
+USERNAME = config['SSH']['username']
+PASSWORD = config['SSH']['password']
 
-if not all((HOST, USERNAME, PASSWORD)):
-    HOST, USERNAME, PASSWORD = request_credentials()
+# Получение имени интерфейса
+def get_interface_name():
+    print("The interface name can be found in the running-config of your internet-center.")
+    interface = input("Enter the interface name (default is Wireguard0): ")
+    return interface.strip() or "Wireguard0"  # Если введена пустая строка, используем Wireguard0
 
-import re
+INTERFACE = get_interface_name()
 
 # Функция для выполнения SSH-команды
 def execute_ssh_command(ip, username, password, command):
@@ -40,10 +42,8 @@ def execute_ssh_command(ip, username, password, command):
     try:
         ssh_client.connect(ip, username=username, password=password)
         stdin, stdout, stderr = ssh_client.exec_command(command)
-        for line in stdout:
-            cleaned_line = re.sub(r'\x1b\[[0-9;]*[mK]', '', line.strip())
-            if cleaned_line:
-                print(cleaned_line, end=' ')
+        output = stdout.read().decode().strip()
+        return output
     except paramiko.AuthenticationException:
         print(f"Authentication failed for {ip}")
     finally:
@@ -62,19 +62,20 @@ download_file('https://community.antifilter.download/list/community.lst', 'commu
 time.sleep(1)
 
 # Чтение файла mine.lst и выполнение команды для каждой строки
-print("Adding subnets from file mine.lst...")
-with open('mine.lst', 'r') as file:
-    for line in file:
-        network = line.strip()
-        command = f"ip route {network} 0.0.0.0 Wireguard0 auto"
-        execute_ssh_command(HOST, USERNAME, PASSWORD, command)
-        print()  # Добавляем пустую строку между выводами для удобства
+def add_subnets_from_file(filename, interface):
+    print(f"Adding subnets from file {filename}...")
+    with open(filename, 'r') as file:
+        for line in file:
+            line = line.strip()
+            # Пропускаем строки, начинающиеся с #
+            if line.startswith("#"):
+                continue
+            network = line.strip()
+            command = f"ip route {network} 0.0.0.0 {interface} auto"
+            output = execute_ssh_command(HOST, USERNAME, PASSWORD, command)
+            if output:
+                 print(output, end='')
 
-# Чтение файла community.lst и выполнение команды для каждой строки
-print("Adding subnets from file community.lst...")
-with open('community.lst', 'r') as file:
-    for line in file:
-        network = line.strip()
-        command = f"ip route {network} 0.0.0.0 Wireguard0 auto"
-        execute_ssh_command(HOST, USERNAME, PASSWORD, command)
-        print()  # Добавляем пустую строку между выводами для удобства
+# Чтение файла mine.lst и community.lst и выполнение команд для каждой строки
+add_subnets_from_file('mine.lst', INTERFACE)
+add_subnets_from_file('community.lst', INTERFACE)
